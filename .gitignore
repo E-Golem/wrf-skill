@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local environments
+.codex/
+.venv/
+env/
+venv/
+
+# Large/local data. Keep data outside Git unless a small sample is intentionally added.
+data/
+
+# Generated outputs
+outputs/
+
+# Keep reports by default because they are lightweight deliverables.
+!reports/
+!reports/*.md

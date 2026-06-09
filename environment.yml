@@ -1,0 +1,12 @@
+name: geocompy
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.9
+  - geopandas
+  - netcdf4
+  - numpy
+  - openpyxl
+  - pandas
+  - pyproj
+  - shapely

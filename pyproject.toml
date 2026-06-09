@@ -1,0 +1,15 @@
+[project]
+name = "wrf-learning"
+version = "0.1.0"
+description = "WRF diagnostic post-processing and station verification utilities."
+requires-python = ">=3.9"
+dependencies = [
+  "geopandas",
+  "netCDF4",
+  "numpy",
+  "pandas",
+  "shapely",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
