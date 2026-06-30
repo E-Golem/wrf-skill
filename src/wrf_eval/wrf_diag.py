@@ -19,13 +19,16 @@ class WrfTmaxDiagnostic:
     variable: str
 
 
-def discover_wrf_diagnostic_files(path: Path) -> list[Path]:
+def discover_wrf_diagnostic_files(path: Path, file_pattern: str | None = None) -> list[Path]:
     """Return one or more WRF diagnostic files from a file or directory path."""
     if path.is_file():
         return [path]
     if not path.is_dir():
         raise FileNotFoundError(f"WRF input does not exist: {path}")
-    files = sorted(p for p in path.iterdir() if p.is_file() and not p.name.startswith("."))
+    if file_pattern:
+        files = sorted(p for p in path.glob(file_pattern) if p.is_file() and not p.name.startswith("."))
+    else:
+        files = sorted(p for p in path.iterdir() if p.is_file() and not p.name.startswith("."))
     if not files:
         raise FileNotFoundError(f"No WRF diagnostic files were found in directory: {path}")
     return files
@@ -276,9 +279,10 @@ def read_wrf_tmax_diagnostics(
     time_offset_hours: int = 0,
     local_day_boundary_hour: int | None = None,
     drop_incomplete_start_day: bool = False,
+    file_pattern: str | None = None,
 ) -> WrfTmaxDiagnostic:
     """Read and merge one or more WRF diagnostic files from a file or directory."""
-    files = discover_wrf_diagnostic_files(path)
+    files = discover_wrf_diagnostic_files(path, file_pattern=file_pattern)
     diagnostics = []
     for file_index, file in enumerate(files):
         diagnostics.append(

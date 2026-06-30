@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from wrf_eval.metrics import compute_metrics, score_from_metrics
+from wrf_eval.metrics import compute_metrics, normalize_metric_names, score_from_metrics
 from wrf_eval.observed import read_china_daily_temperature
 from wrf_eval.sampling import nearest_grid_indices
-from wrf_eval.wrf_diag import read_wrf_tmax_diagnostics
+from wrf_eval.wrf_diag import WrfTmaxDiagnostic, read_wrf_tmax_diagnostics
+from wrf_eval.wrf_hourly import read_wrf_hourly_t2_as_daily_tmax
 
 
 @dataclass(frozen=True)
@@ -21,7 +22,10 @@ class ProcessingConfig:
     boundary: Path | None
     output_dir: Path
     report_dir: Path
+    scheme_name: str | None = None
     variable: str = "T2MAX"
+    input_kind: str = "diagnostic_tmax"
+    file_pattern: str | None = None
     coord_source: Path | None = None
     rebuild_start: str | None = None
     time_step_days: int = 1
@@ -29,6 +33,10 @@ class ProcessingConfig:
     time_offset_hours: int = 0
     local_day_boundary_hour: int | None = None
     drop_incomplete_start_day: bool = False
+    drop_incomplete_end_day: bool = False
+    validation_start: str | None = None
+    validation_end: str | None = None
+    score_metrics: str | tuple[str, ...] | list[str] | None = None
     date_match: str = "exact"
 
 
@@ -50,6 +58,63 @@ def _temperature_files(observed_dir: Path) -> list[Path]:
     if not files:
         raise FileNotFoundError(f"No China daily TEM files were found under {observed_dir}.")
     return files
+
+
+def _scheme_name(config: ProcessingConfig) -> str:
+    if config.scheme_name:
+        return config.scheme_name
+    return config.wrf_input.name if config.wrf_input.name else config.wrf_input.stem
+
+
+def _parse_validation_bound(day: date, value: str | None) -> date | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    parts = text.split("-")
+    if len(parts) == 2:
+        month, day_num = (int(part) for part in parts)
+        return date(day.year, month, day_num)
+    return pd.to_datetime(text, errors="raise").date()
+
+
+def date_in_validation_window(day: date, validation_start: str | None, validation_end: str | None) -> bool:
+    start = _parse_validation_bound(day, validation_start)
+    end = _parse_validation_bound(day, validation_end)
+    if start is None and end is None:
+        return True
+    if start is not None and end is None:
+        return day >= start
+    if start is None and end is not None:
+        return day <= end
+    if start <= end:
+        return start <= day <= end
+    return day >= start or day <= end
+
+
+def _filter_wrf_validation_window(
+    wrf: WrfTmaxDiagnostic,
+    validation_start: str | None,
+    validation_end: str | None,
+) -> WrfTmaxDiagnostic:
+    if validation_start is None and validation_end is None:
+        return wrf
+    indices = [
+        idx
+        for idx, day in enumerate(wrf.dates)
+        if date_in_validation_window(day, validation_start, validation_end)
+    ]
+    if not indices:
+        raise ValueError(f"No WRF records remain after validation window filtering: {validation_start} to {validation_end}.")
+    return WrfTmaxDiagnostic(
+        dates=[wrf.dates[idx] for idx in indices],
+        tmax_c=wrf.tmax_c[indices],
+        lat=wrf.lat,
+        lon=wrf.lon,
+        source=wrf.source,
+        variable=wrf.variable,
+    )
 
 
 def filter_points_by_boundary(stations: pd.DataFrame, boundary_path: Path | None) -> pd.DataFrame:
@@ -96,7 +161,7 @@ def _build_station_grid_index(stations: pd.DataFrame, lat: np.ndarray, lon: np.n
     return unique
 
 
-def _sample_wrf_for_stations(dates: list, tmax_c: np.ndarray, station_index: pd.DataFrame) -> pd.DataFrame:
+def _sample_wrf_for_stations(dates: list[date], tmax_c: np.ndarray, station_index: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for station in station_index.itertuples(index=False):
         values = tmax_c[:, int(station.grid_y), int(station.grid_x)]
@@ -117,7 +182,7 @@ def _sample_wrf_for_stations(dates: list, tmax_c: np.ndarray, station_index: pd.
 
 
 def merge_observed_and_sampled(observed: pd.DataFrame, sampled: pd.DataFrame, mode: str = "exact") -> pd.DataFrame:
-    """Merge observed and WRF sampled values either by exact date or by month-day."""
+    """Merge observed and WRF sampled values either by exact date or month-day."""
     if mode == "exact":
         matched = observed.merge(sampled, on=["station_id", "date"], how="inner")
         matched["observed_date"] = matched["date"]
@@ -137,11 +202,11 @@ def merge_observed_and_sampled(observed: pd.DataFrame, sampled: pd.DataFrame, mo
     raise ValueError(f"Unsupported date match mode: {mode}")
 
 
-def _metrics_frame(grouped, group_columns: list[str]) -> pd.DataFrame:
+def _metrics_frame(grouped, group_columns: list[str], selected_metrics: list[str]) -> pd.DataFrame:
     rows = []
     for keys, group in grouped:
         metrics = compute_metrics(group["tmax_obs_c"].to_numpy(), group["tmax_wrf_c"].to_numpy())
-        metrics["score"] = score_from_metrics(metrics)
+        metrics["score"] = score_from_metrics(metrics, selected_metrics=selected_metrics)
         if not isinstance(keys, tuple):
             keys = (keys,)
         row = dict(zip(group_columns, keys))
@@ -153,6 +218,19 @@ def _metrics_frame(grouped, group_columns: list[str]) -> pd.DataFrame:
 def _write_csv(frame: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(path, index=False, encoding="utf-8-sig")
+
+
+def _report_metric_columns(config: ProcessingConfig) -> list[str]:
+    return ["n", "score", *normalize_metric_names(config.score_metrics)]
+
+
+def _table_columns(base_columns: list[str], config: ProcessingConfig) -> list[str]:
+    columns = [*base_columns, "n", "score", *normalize_metric_names(config.score_metrics)]
+    seen = []
+    for column in columns:
+        if column not in seen:
+            seen.append(column)
+    return seen
 
 
 def frame_to_markdown_table(frame: pd.DataFrame) -> str:
@@ -174,6 +252,24 @@ def frame_to_markdown_table(frame: pd.DataFrame) -> str:
                 values.append(str(value))
         lines.append("| " + " | ".join(values) + " |")
     return "\n".join(lines)
+
+
+def _input_kind_note(config: ProcessingConfig) -> str:
+    if config.input_kind == "hourly_t2":
+        return "说明：本次输入按逐小时 WRF 输出处理，读取逐小时 `T2` 并按本地日界聚合为日最高温。"
+    return "说明：本次输入按 WRF 气象诊断结果处理，直接读取诊断日最高温变量。"
+
+
+def _processing_step_1(config: ProcessingConfig) -> str:
+    if config.input_kind == "hourly_t2":
+        return "1. 读取逐小时 WRF NetCDF 文件，解析时间轴、`XLAT`、`XLONG` 和逐小时 `T2`。"
+    return "1. 读取 WRF 气象诊断 NetCDF 文件，解析 `Times`、`XLAT`、`XLONG` 和诊断日最高温变量。"
+
+
+def _processing_step_2(config: ProcessingConfig) -> str:
+    if config.input_kind == "hourly_t2":
+        return "2. 将逐小时 `T2` 从 K 转换为摄氏度，先按配置校正到本地时间，再按本地日界聚合为日最高温。"
+    return "2. 将诊断日最高温从 K 转换为摄氏度，按配置校正时间轴和本地日界，并剔除无效时间或不合理温度格点。"
 
 
 def _write_report(
@@ -198,6 +294,9 @@ def _write_report(
         "## 1. 输入数据",
         "",
         f"- WRF 输入：`{config.wrf_input}`",
+        f"- 当前参数化方案：`{_scheme_name(config)}`",
+        f"- 输入类型：`{config.input_kind}`",
+        f"- 文件匹配模式：`{config.file_pattern}`",
         f"- WRF 变量：`{config.variable}`",
         f"- 坐标参考文件：`{config.coord_source}`",
         f"- 观测目录：`{config.observed_dir}`",
@@ -209,16 +308,20 @@ def _write_report(
         f"- WRF 时间偏移：`UTC{config.time_offset_hours:+d}` 小时",
         f"- 本地日界小时：`{config.local_day_boundary_hour}`",
         f"- 丢弃首个不完整本地日：`{config.drop_incomplete_start_day}`",
+        f"- 丢弃末尾不完整本地日：`{config.drop_incomplete_end_day}`",
+        f"- 验证起始日期：`{config.validation_start}`",
+        f"- 验证结束日期：`{config.validation_end}`",
+        f"- 参与评分指标：`{', '.join(normalize_metric_names(config.score_metrics))}`",
         "",
-        "说明：本次输入的 WRF 文件按气象诊断结果处理，直接读取诊断变量 `T2MAX`，未按原始 `wrfout` 的逐小时 `T2` 重新聚合。",
+        _input_kind_note(config),
         "",
         "## 2. 处理过程",
         "",
-        "1. 读取 WRF 诊断 NetCDF 文件，解析 `Times`、`XLAT`、`XLONG` 和 `T2MAX`。",
-        "2. 将 `T2MAX` 从 K 转换为摄氏度，先按配置将 WRF UTC 时间校正到本地时间，再按本地日界归属日期并筛选/剔除无效时间、空时间和不合理温度格点。",
+        _processing_step_1(config),
+        _processing_step_2(config),
         "3. 读取中国地面气象站日值温度 TXT，解析站号、经纬度、日期和日最高温。",
-        "4. 使用长江流域边界筛选站点，并将站点匹配到最近 WRF 网格。",
-        "5. 对站点-日期配对样本计算 PCC、RMSE、MAE、RSD、Bias、MAPE、NSE，并生成综合评分。",
+        "4. 使用研究区边界筛选站点，并将站点匹配到最近 WRF 网格。",
+        "5. 对站点-日期配对样本计算候选指标，并按配置选择部分指标生成综合评分。",
         "",
         "## 3. 数据覆盖",
         "",
@@ -233,7 +336,7 @@ def _write_report(
         "| 指标 | 数值 |",
         "|---|---:|",
     ]
-    for key in ["n", "score", "pcc", "rmse", "mae", "rsd", "bias", "mape", "nse", "obs_mean", "model_mean"]:
+    for key in _report_metric_columns(config):
         value = overall.get(key, np.nan)
         if isinstance(value, (int, np.integer)):
             formatted = str(value)
@@ -246,17 +349,17 @@ def _write_report(
             "",
             "## 5. 逐日评分",
             "",
-            frame_to_markdown_table(daily_preview[["date", "n", "score", "pcc", "rmse", "mae", "rsd", "bias"]]),
+            frame_to_markdown_table(daily_preview[_table_columns(["date"], config)]),
             "",
             "## 6. 站点评分摘要",
             "",
             "得分最高的站点：",
             "",
-            frame_to_markdown_table(best_station[["station_id", "n", "score", "pcc", "rmse", "mae", "rsd", "bias"]]),
+            frame_to_markdown_table(best_station[_table_columns(["station_id"], config)]),
             "",
             "得分最低的站点：",
             "",
-            frame_to_markdown_table(worst_station[["station_id", "n", "score", "pcc", "rmse", "mae", "rsd", "bias"]]),
+            frame_to_markdown_table(worst_station[_table_columns(["station_id"], config)]),
             "",
             "## 7. 输出文件",
             "",
@@ -267,12 +370,14 @@ def _write_report(
             "",
             "## 8. 注意事项",
             "",
-        "- 当前 WRF 诊断文件只有部分有效 `Times` 记录，处理程序已自动剔除空时间和大面积无效温度记录。",
-        "- 若启用 WRF 时间偏移，程序会先将 WRF 时间转换到观测数据对应时区，再按本地日界归属站点日值日期。",
-        "- 当本地日界小时为 20 时，北京时间 20:00 及之前归当天站点日值，20:00 之后归下一天站点日值。",
-        "- 若启用丢弃首个不完整本地日，程序只会对整个输入序列的第一个文件生效，避免多文件拼接时误删每个分段文件的首日。",
-        "- 当日期匹配模式为 `month_day` 时，评分表示同月日参考对比，不表示严格的同年份实况检验。",
-        "- 站点匹配采用最近邻格点，后续可扩展为双线性插值或站点海拔订正。",
+            "- 若启用 WRF 时间偏移，程序会先将 WRF 时间转换到观测数据对应时区，再按本地日界归属站点日值日期。",
+            "- 当本地日界小时为 20 时，北京时间 20:00 及之前归当天站点日值，20:00 之后归下一天站点日值。",
+            "- 若启用丢弃首个不完整本地日，程序只会对整个输入序列的第一个文件生效，避免多文件拼接时误删每个分段文件的首日。",
+            "- 逐小时输入可启用丢弃末尾不完整本地日，避免用不足 24 小时的窗口低估日最高温。",
+            "- 当前评分支持通过 `--score-metrics` 或 YAML 配置选择参与综合评分的指标，适合按统一口径批量比较不同参数化方案。",
+            "- 批量方案对比可采用统一输入规范：每个方案一个文件夹，文件夹名作为方案名；程序自动生成各方案 `overall_score.csv` 后，再汇总排序选择最高分方案。",
+            "- 当日期匹配模式为 `month_day` 时，评分表示同月日参考对比，不表示严格的同年份实况检验。",
+            "- 站点匹配采用最近邻格点，后续可扩展为双线性插值或站点海拔订正。",
             "- 综合评分用于快速比较模型表现，不替代对 PCC、RMSE、MAE、RSD 等单项指标的专业判断。",
         ]
     )
@@ -280,17 +385,34 @@ def _write_report(
 
 
 def run_processing(config: ProcessingConfig) -> ProcessingResult:
-    wrf = read_wrf_tmax_diagnostics(
-        config.wrf_input,
-        variable=config.variable,
-        coord_source=config.coord_source,
-        rebuild_start=config.rebuild_start,
-        time_step_days=config.time_step_days,
-        drop_initial_frames=config.drop_initial_frames,
-        time_offset_hours=config.time_offset_hours,
-        local_day_boundary_hour=config.local_day_boundary_hour,
-        drop_incomplete_start_day=config.drop_incomplete_start_day,
-    )
+    if config.input_kind == "diagnostic_tmax":
+        wrf = read_wrf_tmax_diagnostics(
+            config.wrf_input,
+            variable=config.variable,
+            coord_source=config.coord_source,
+            rebuild_start=config.rebuild_start,
+            time_step_days=config.time_step_days,
+            drop_initial_frames=config.drop_initial_frames,
+            time_offset_hours=config.time_offset_hours,
+            local_day_boundary_hour=config.local_day_boundary_hour,
+            drop_incomplete_start_day=config.drop_incomplete_start_day,
+            file_pattern=config.file_pattern,
+        )
+    elif config.input_kind == "hourly_t2":
+        wrf = read_wrf_hourly_t2_as_daily_tmax(
+            config.wrf_input,
+            variable=config.variable,
+            coord_source=config.coord_source,
+            time_offset_hours=config.time_offset_hours,
+            local_day_boundary_hour=config.local_day_boundary_hour,
+            drop_incomplete_start_day=config.drop_incomplete_start_day,
+            drop_incomplete_end_day=config.drop_incomplete_end_day,
+            file_pattern=config.file_pattern,
+        )
+    else:
+        raise ValueError(f"Unsupported input_kind: {config.input_kind}")
+
+    wrf = _filter_wrf_validation_window(wrf, config.validation_start, config.validation_end)
     observed = read_china_daily_temperature(_temperature_files(config.observed_dir))
     if config.date_match == "exact":
         observed = observed[observed["date"].isin(wrf.dates)].copy()
@@ -313,11 +435,19 @@ def run_processing(config: ProcessingConfig) -> ProcessingResult:
         raise ValueError("No matched station-date pairs were available after WRF sampling.")
     matched["error_c"] = matched["tmax_wrf_c"] - matched["tmax_obs_c"]
 
+    selected_metrics = normalize_metric_names(config.score_metrics)
     overall_metrics = compute_metrics(matched["tmax_obs_c"].to_numpy(), matched["tmax_wrf_c"].to_numpy())
-    overall_metrics["score"] = score_from_metrics(overall_metrics)
+    overall_metrics["score"] = score_from_metrics(overall_metrics, selected_metrics=selected_metrics)
+    overall_metrics["scheme_name"] = _scheme_name(config)
+    overall_metrics["input_kind"] = config.input_kind
+    overall_metrics["validation_start"] = config.validation_start
+    overall_metrics["validation_end"] = config.validation_end
+    overall_metrics["score_metrics"] = ",".join(selected_metrics)
     overall = pd.DataFrame([overall_metrics])
-    daily = _metrics_frame(matched.groupby("date"), ["date"]).sort_values("date")
-    station = _metrics_frame(matched.groupby("station_id"), ["station_id"]).sort_values("score", ascending=False)
+    daily = _metrics_frame(matched.groupby("date"), ["date"], selected_metrics).sort_values("date")
+    station = _metrics_frame(matched.groupby("station_id"), ["station_id"], selected_metrics).sort_values("score", ascending=False)
+    daily.insert(0, "scheme_name", _scheme_name(config))
+    station.insert(0, "scheme_name", _scheme_name(config))
 
     table_dir = config.output_dir / "tables"
     matched_path = table_dir / "matched_station_daily_tmax.csv"

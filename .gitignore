@@ -14,6 +14,7 @@ data/
 
 # Generated outputs
 outputs/
+reports/runs/
 
 # Keep reports by default because they are lightweight deliverables.
 !reports/

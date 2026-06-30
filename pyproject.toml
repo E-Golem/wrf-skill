@@ -1,15 +1,19 @@
 [project]
 name = "wrf-learning"
-version = "0.1.0"
-description = "WRF diagnostic post-processing and station verification utilities."
+version = "1.0.0"
+description = "WRF Tmax station verification and radiation scheme comparison utilities."
 requires-python = ">=3.9"
 dependencies = [
   "geopandas",
   "netCDF4",
   "numpy",
   "pandas",
+  "pyyaml",
   "shapely",
 ]
+
+[project.scripts]
+wrf-score = "wrf_eval.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

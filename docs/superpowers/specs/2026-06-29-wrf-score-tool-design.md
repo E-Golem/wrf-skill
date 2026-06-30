@@ -41,7 +41,7 @@ The first version should be a Python CLI with YAML configuration:
 
 ```powershell
 conda run -n geocompy wrf-score run --config configs/tmax_validation.yaml
-conda run -n geocompy wrf-score compare --run-id yangtze_tmax_validation
+conda run -n geocompy wrf-score compare --run-id wrf_tmax_station_validation
 conda run -n geocompy wrf-score inspect --wrf-input data/wrfout/lw4-sw2
 ```
 
@@ -131,7 +131,7 @@ The YAML configuration should be explicit and versioned:
 version: 1
 
 project:
-  name: yangtze_tmax_validation
+  name: wrf_tmax_station_validation
 
 wrf:
   input_root: data/wrfout
@@ -176,9 +176,9 @@ metrics:
     rsd: 1
 
 output:
-  run_id: yangtze_tmax_validation
+  run_id: wrf_tmax_station_validation
   output_root: outputs/runs
-  report_root: reports
+  report_root: reports/runs
   formats:
     - csv
     - markdown
@@ -262,14 +262,14 @@ outputs/runs/<run_id>/<scheme_name>/tables/matched_station_daily_tmax.csv
 outputs/runs/<run_id>/<scheme_name>/tables/overall_score.csv
 outputs/runs/<run_id>/<scheme_name>/tables/daily_scores.csv
 outputs/runs/<run_id>/<scheme_name>/tables/station_scores.csv
-reports/<run_id>/<scheme_name>/wrf_tmax_evaluation_report.md
+reports/runs/<run_id>/<scheme_name>/wrf_tmax_evaluation_report.md
 ```
 
 The comparison stage should write:
 
 ```text
 outputs/runs/<run_id>/scheme-comparison/scheme_comparison.csv
-reports/<run_id>/scheme-comparison/scheme_comparison_report.md
+reports/runs/<run_id>/scheme-comparison/scheme_comparison_report.md
 ```
 
 ## Error Handling
