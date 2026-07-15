@@ -1,6 +1,6 @@
 [project]
 name = "wrf-learning"
-version = "1.1.0"
+version = "1.1.1"
 description = "WRF Tmax station verification and radiation scheme comparison utilities."
 requires-python = ">=3.9"
 dependencies = [

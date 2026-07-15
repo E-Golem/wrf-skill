@@ -1,4 +1,4 @@
-name: geocompy
+name: wrfpy
 channels:
   - conda-forge
 dependencies:

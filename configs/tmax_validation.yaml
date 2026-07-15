@@ -12,7 +12,7 @@ wrf:
 
 observed:
   data_dir: data/observed
-  boundary: data/boundary/Yangtze.shp
+  boundary: data/boundary/study_area.shp
   station_policy: all_in_boundary
 
 validation:

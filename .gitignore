@@ -14,8 +14,12 @@ data/
 
 # Generated outputs
 outputs/
-reports/runs/
+reports/
+dist/
+build/
+*.egg-info/
 
-# Keep reports by default because they are lightweight deliverables.
-!reports/
-!reports/*.md
+# Local one-off run scripts from exploratory validation runs.
+scripts/run_tmax_evaluation*.ps1
+scripts/run_batch_tmax_hourly_schemes.ps1
+!scripts/run_wrf_score.ps1

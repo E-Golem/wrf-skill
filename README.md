@@ -1,82 +1,99 @@
 # WRF Station Verification Toolkit
 
-Version: v1.1.0
+Version: v1.1.1
 
-This project provides a configuration-driven Python tool for verifying WRF `wrfout` simulations against Chinese meteorological station daily observations. It is designed for batch comparison of parameterization experiments, especially folders named like `lw4-sw2` where `lw` is the longwave radiation scheme and `sw` is the shortwave radiation scheme.
+This project provides a configuration-driven Python toolkit for verifying WRF `wrfout` simulations against Chinese meteorological station daily observations. It is intended for reproducible batch evaluation of parameterization experiments, especially experiment folders named like `lw4-sw2`, where `lw` denotes the longwave radiation scheme and `sw` denotes the shortwave radiation scheme.
 
-## v1.1 Scope
+## Scope
 
-- Input type is fixed to WRF `wrfout` structure.
-- Observation type is fixed to Chinese station daily data.
-- Time handling is fixed: WRF UTC timestamps are converted to Beijing time UTC+8.
-- Station daily boundary is fixed at Beijing time 20:00.
-- Metrics are fixed: `PCC`, `bias`, `MAE`, `RMSE`, `Normalized cRMSE`, `RSD`.
-- Supported validation variables are `Tmax`, `T2`, and `RH`.
-- `Tmax` is aggregated from hourly `T2` as daily maximum 2 m temperature and compared with `tmax_obs_c`.
-- `T2` is aggregated from hourly `T2` as daily mean 2 m temperature and compared with `tmean_obs_c`.
-- `RH` is read from `RH2` or `RH`, or calculated from `T2 + Q2 + PSFC`, then aggregated as daily mean relative humidity and compared with RHU station observations.
-- Only complete station-days inside the validation window are scored. Removed dates are written to `excluded_days.csv`.
+- Input type: WRF `wrfout` files only.
+- Observation type: Chinese station daily data.
+- Time handling: WRF UTC timestamps are converted to Beijing time UTC+8.
+- Station-day boundary: Beijing time 20:00.
+- Fixed metrics: `PCC`, `bias`, `MAE`, `RMSE`, `Normalized cRMSE`, `RSD`.
+- Supported validation variables: `Tmax`, `T2`, and `RH`.
+- Output root: all CSV tables and Markdown reports are written under `outputs/runs/<run_id>/`.
 
-Current limitations:
+Variable rules:
 
-- Validation is currently station-based; gridded observations and reanalysis products are not included.
-- The local sample data does not include RHU observations or full RH/Q2/PSFC wrfout variables, so RH capability requires additional data.
-- Nearest-grid-cell station sampling is used in v1.1. Bilinear interpolation and elevation correction are later extension points.
+- `Tmax`: daily maximum 2 m temperature aggregated from hourly `T2`, compared with station `tmax_obs_c`.
+- `T2`: daily mean 2 m temperature aggregated from hourly `T2`, compared with station `tmean_obs_c`.
+- `RH`: daily mean 2 m relative humidity read from `RH2` or `RH`, or calculated from `T2 + Q2 + PSFC`, compared with station RHU observations.
 
-## Project Structure
+## Repository Layout
 
 - `configs/`: YAML run configurations.
-- `src/wrf_eval/`: reusable Python package and CLI.
+- `src/wrf_eval/`: Python package and CLI implementation.
 - `tests/`: unit tests.
-- `outputs/runs/`: generated CSV tables and Markdown reports.
-- `docs/`: feature notes, release notes, and example run documentation.
+- `scripts/`: portable command examples.
+- `docs/`: user-facing feature notes and release notes.
+- `data/`: local input data location. This directory is ignored by Git.
+- `outputs/`: generated results. This directory is ignored by Git.
+- `reports/`: legacy or local reports. This directory is ignored by Git.
 
-Large WRF files and station data should stay under `data/` and are not intended to be published to GitHub.
+Large WRF outputs, station observations, boundaries, and generated verification reports should not be committed to the public repository.
 
 ## Environment
 
-Use the existing conda environment:
+The recommended conda environment name is `wrfpy`:
 
 ```powershell
-conda run -n geocompy python -c "import numpy, pandas, geopandas, netCDF4"
+conda env create -f environment.yml
+conda activate wrfpy
 ```
 
-If rebuilding the environment, use:
+To verify the core dependencies:
 
 ```powershell
-conda env update -f environment.yml
+conda run -n wrfpy python -c "import numpy, pandas, geopandas, netCDF4"
 ```
 
-## Recommended Workflow
+## Example Workspace
 
-Set the source path:
+Use a generic project location such as:
 
 ```powershell
-cd D:\文档\wrf_learning
-$env:PYTHONPATH='src'
+cd D:/wrf/wrf-station-verification
+$env:PYTHONPATH = "src"
 ```
 
-Inspect configured schemes and input readiness:
+Recommended data layout:
 
-```powershell
-conda run -n geocompy python -m wrf_eval.cli inspect --config configs/tmax_validation.yaml
+```text
+data/
+  wrfout/
+    lw1-sw1/
+      wrfout_d01_2020-06-01_00_00_00
+    lw4-sw2/
+      wrfout_d01_2020-06-01_00_00_00
+  observed/
+    SURF_CLI_CHN_MUL_DAY-TEM-*.TXT
+    SURF_CLI_CHN_MUL_DAY-RHU-*.TXT
+  boundary/
+    study_area.shp
 ```
 
-Run batch evaluation:
+## Basic Usage
+
+Inspect configured schemes and data readiness:
 
 ```powershell
-conda run -n geocompy python -m wrf_eval.cli run --config configs/tmax_validation.yaml
+conda run -n wrfpy python -m wrf_eval.cli inspect --config configs/tmax_validation.yaml
+```
+
+Run batch verification:
+
+```powershell
+conda run -n wrfpy python -m wrf_eval.cli run --config configs/tmax_validation.yaml
 ```
 
 Compare existing scheme scores:
 
 ```powershell
-conda run -n geocompy python -m wrf_eval.cli compare --config configs/tmax_validation.yaml
+conda run -n wrfpy python -m wrf_eval.cli compare --config configs/tmax_validation.yaml
 ```
 
-## Configuration
-
-Minimal v1.1 config:
+## Minimal Configuration
 
 ```yaml
 version: 1
@@ -87,7 +104,7 @@ wrf:
     - "wrfout_d0*"
 observed:
   data_dir: data/observed
-  boundary: data/boundary/Yangtze.shp
+  boundary: data/boundary/study_area.shp
 validation:
   variable: Tmax
   start: "06-01"
@@ -96,11 +113,11 @@ output:
   root: outputs/runs
 ```
 
-The old public fields `input-kind`, `report-dir`, `score-metrics`, time offset, and day-boundary options are intentionally removed in v1.1.
+The public interface intentionally does not expose input-kind, report-dir, score-metric, time-offset, or day-boundary options. These are fixed defaults in v1.1.x.
 
 ## Outputs
 
-The default run id is derived from the validation variable:
+Default run ids are derived from the selected variable:
 
 ```text
 wrf_tmax_station_validation
@@ -108,7 +125,7 @@ wrf_t2_station_validation
 wrf_rh_station_validation
 ```
 
-Generated outputs are written to one merged output tree:
+Generated files:
 
 ```text
 outputs/runs/<run_id>/<scheme>/tables/overall_score.csv
@@ -120,9 +137,11 @@ outputs/runs/<run_id>/scheme-comparison/scheme_comparison.csv
 outputs/runs/<run_id>/scheme-comparison/scheme_comparison_report.md
 ```
 
+`excluded_days.csv` records dates removed because they are outside the validation window or do not contain a complete station-day.
+
 ## Tests
 
 ```powershell
-$env:PYTHONPATH='src'
-conda run -n geocompy python -m unittest discover -s tests
+$env:PYTHONPATH = "src"
+conda run -n wrfpy python -m unittest discover -s tests
 ```
