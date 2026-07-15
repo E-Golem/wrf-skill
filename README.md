@@ -1,28 +1,35 @@
-# WRF Tmax Station Verification Toolkit
+# WRF Station Verification Toolkit
 
-Version: v1.0
+Version: v1.1.0
 
-This project provides a configuration-driven Python tool for WRF daily maximum temperature verification against Chinese meteorological station observations. It is designed for batch comparison of WRF parameterization experiments, especially folders named like `lw4-sw2`.
+This project provides a configuration-driven Python tool for verifying WRF `wrfout` simulations against Chinese meteorological station daily observations. It is designed for batch comparison of parameterization experiments, especially folders named like `lw4-sw2` where `lw` is the longwave radiation scheme and `sw` is the shortwave radiation scheme.
 
-## v1.0 Scope
+## v1.1 Scope
 
-This release is intentionally narrow and reproducible:
+- Input type is fixed to WRF `wrfout` structure.
+- Observation type is fixed to Chinese station daily data.
+- Time handling is fixed: WRF UTC timestamps are converted to Beijing time UTC+8.
+- Station daily boundary is fixed at Beijing time 20:00.
+- Metrics are fixed: `PCC`, `bias`, `MAE`, `RMSE`, `Normalized cRMSE`, `RSD`.
+- Supported validation variables are `Tmax`, `T2`, and `RH`.
+- `Tmax` is aggregated from hourly `T2` as daily maximum 2 m temperature and compared with `tmax_obs_c`.
+- `T2` is aggregated from hourly `T2` as daily mean 2 m temperature and compared with `tmean_obs_c`.
+- `RH` is read from `RH2` or `RH`, or calculated from `T2 + Q2 + PSFC`, then aggregated as daily mean relative humidity and compared with RHU station observations.
+- Only complete station-days inside the validation window are scored. Removed dates are written to `excluded_days.csv`.
 
-- Only compares experiments formed by changing longwave radiation (`lw`) and shortwave radiation (`sw`) schemes.
-- Only validates daily maximum temperature (`Tmax`).
-- Currently supports station-observation verification for Chinese ground meteorological daily temperature data.
-- Current spatial matching uses nearest WRF grid cell to station location.
-- Current outputs are CSV tables and Markdown reports.
-- Heatwave-event metrics, gridded observations, reanalysis verification, other countries' station formats, and web visualization are not included in v1.0.
+Current limitations:
+
+- Validation is currently station-based; gridded observations and reanalysis products are not included.
+- The local sample data does not include RHU observations or full RH/Q2/PSFC wrfout variables, so RH capability requires additional data.
+- Nearest-grid-cell station sampling is used in v1.1. Bilinear interpolation and elevation correction are later extension points.
 
 ## Project Structure
 
 - `configs/`: YAML run configurations.
 - `src/wrf_eval/`: reusable Python package and CLI.
 - `tests/`: unit tests.
-- `outputs/runs/`: generated CSV outputs.
-- `reports/runs/`: generated Markdown reports.
-- `docs/`: design notes, release notes, and example run documentation.
+- `outputs/runs/`: generated CSV tables and Markdown reports.
+- `docs/`: feature notes, release notes, and example run documentation.
 
 Large WRF files and station data should stay under `data/` and are not intended to be published to GitHub.
 
@@ -49,84 +56,69 @@ cd D:\文档\wrf_learning
 $env:PYTHONPATH='src'
 ```
 
-Inspect which schemes will be evaluated:
+Inspect configured schemes and input readiness:
 
 ```powershell
 conda run -n geocompy python -m wrf_eval.cli inspect --config configs/tmax_validation.yaml
 ```
 
-Run the full batch evaluation:
+Run batch evaluation:
 
 ```powershell
 conda run -n geocompy python -m wrf_eval.cli run --config configs/tmax_validation.yaml
 ```
 
-The `run` command shows progress while processing each scheme.
+Compare existing scheme scores:
 
-## Default Output Names
+```powershell
+conda run -n geocompy python -m wrf_eval.cli compare --config configs/tmax_validation.yaml
+```
 
-The default run id is now generic:
+## Configuration
+
+Minimal v1.1 config:
+
+```yaml
+version: 1
+wrf:
+  input_root: data/wrfout
+  schemes: auto
+  file_patterns:
+    - "wrfout_d0*"
+observed:
+  data_dir: data/observed
+  boundary: data/boundary/Yangtze.shp
+validation:
+  variable: Tmax
+  start: "06-01"
+  end: "10-01"
+output:
+  root: outputs/runs
+```
+
+The old public fields `input-kind`, `report-dir`, `score-metrics`, time offset, and day-boundary options are intentionally removed in v1.1.
+
+## Outputs
+
+The default run id is derived from the validation variable:
 
 ```text
 wrf_tmax_station_validation
+wrf_t2_station_validation
+wrf_rh_station_validation
 ```
 
-Generated outputs are written to:
+Generated outputs are written to one merged output tree:
 
 ```text
-outputs/runs/wrf_tmax_station_validation/
-reports/runs/wrf_tmax_station_validation/
+outputs/runs/<run_id>/<scheme>/tables/overall_score.csv
+outputs/runs/<run_id>/<scheme>/tables/daily_scores.csv
+outputs/runs/<run_id>/<scheme>/tables/station_scores.csv
+outputs/runs/<run_id>/<scheme>/tables/excluded_days.csv
+outputs/runs/<run_id>/<scheme>/reports/wrf_<variable>_evaluation_report.md
+outputs/runs/<run_id>/scheme-comparison/scheme_comparison.csv
+outputs/runs/<run_id>/scheme-comparison/scheme_comparison_report.md
 ```
-
-Important files:
-
-```text
-outputs/runs/wrf_tmax_station_validation/<scheme>/tables/overall_score.csv
-outputs/runs/wrf_tmax_station_validation/<scheme>/tables/daily_scores.csv
-outputs/runs/wrf_tmax_station_validation/<scheme>/tables/station_scores.csv
-outputs/runs/wrf_tmax_station_validation/scheme-comparison/scheme_comparison.csv
-reports/runs/wrf_tmax_station_validation/<scheme>/wrf_tmax_evaluation_report.md
-reports/runs/wrf_tmax_station_validation/scheme-comparison/scheme_comparison_report.md
-```
-
-## Default Metrics
-
-The default composite score uses:
-
-- `PCC`
-- `bias`
-- `MAE`
-- `RMSE`
-- `Normalized cRMSE`
-- `RSD`
-
-The composite score is for fast scheme ranking. Scientific interpretation should still inspect the individual metrics.
-
-## Legacy Single-Scheme CLI
-
-The earlier one-scheme command remains supported:
-
-```powershell
-conda run -n geocompy python -m wrf_eval.cli `
-  --wrf-input "data/wrfout/lw4-sw2" `
-  --scheme-name "lw4-sw2" `
-  --input-kind "hourly_t2" `
-  --file-pattern "T2_output*.nc" `
-  --observed-dir "data/observed" `
-  --boundary "data/boundary/Yangtze.shp" `
-  --output-dir "outputs/lw4-sw2-hourly-t2" `
-  --report-dir "reports/lw4-sw2-hourly-t2" `
-  --variable "T2" `
-  --time-offset-hours 8 `
-  --local-day-boundary-hour 20 `
-  --drop-incomplete-start-day `
-  --drop-incomplete-end-day `
-  --validation-start "06-01" `
-  --validation-end "10-01" `
-  --score-metrics "pcc,bias,mae,rmse,normalized_crmse,rsd"
-```
-
-For v1.0 and later work, prefer the YAML batch workflow.
 
 ## Tests
 

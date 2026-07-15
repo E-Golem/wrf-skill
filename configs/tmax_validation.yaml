@@ -7,48 +7,18 @@ wrf:
   input_root: data/wrfout
   schemes: auto
   scheme_name_pattern: "lw{lw}-sw{sw}"
-  input_kind: hourly_t2
-  variable: T2
   file_patterns:
-    - "T2_output*.nc"
-    - "T2_out*.nc"
+    - "wrfout_d0*"
 
 observed:
   data_dir: data/observed
   boundary: data/boundary/Yangtze.shp
   station_policy: all_in_boundary
 
-time:
-  time_offset_hours: 8
-  local_day_boundary_hour: 20
-  drop_incomplete_start_day: true
-  drop_incomplete_end_day: true
-
 validation:
+  variable: Tmax
   start: "06-01"
   end: "10-01"
-  date_match: exact
-
-metrics:
-  selected:
-    - pcc
-    - bias
-    - mae
-    - rmse
-    - normalized_crmse
-    - rsd
-  weights:
-    pcc: 1
-    bias: 1
-    mae: 1
-    rmse: 1
-    normalized_crmse: 1
-    rsd: 1
 
 output:
-  run_id: wrf_tmax_station_validation
-  output_root: outputs/runs
-  report_root: reports/runs
-  formats:
-    - csv
-    - markdown
+  root: outputs/runs

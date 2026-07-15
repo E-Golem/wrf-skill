@@ -70,6 +70,8 @@ def collect_overall_scores(output_root: Path, scheme_outputs: list[str] | None =
 
 
 def frame_to_markdown_table(frame: pd.DataFrame) -> str:
+    if frame.empty:
+        return "_No records._"
     columns = [str(column) for column in frame.columns]
     lines = [
         "| " + " | ".join(columns) + " |",
@@ -86,12 +88,11 @@ def frame_to_markdown_table(frame: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
-def write_comparison_outputs(ranked: pd.DataFrame, output_dir: Path, report_dir: Path) -> tuple[Path, Path]:
-    """Write comparison CSV and a readable Markdown report."""
+def write_comparison_outputs(ranked: pd.DataFrame, output_dir: Path) -> tuple[Path, Path]:
+    """Write comparison CSV and Markdown report into one output directory."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    report_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / "scheme_comparison.csv"
-    report_path = report_dir / "scheme_comparison_report.md"
+    report_path = output_dir / "scheme_comparison_report.md"
     ranked.to_csv(csv_path, index=False, encoding="utf-8-sig")
     best = ranked.iloc[0]
     display_columns = [
@@ -102,7 +103,7 @@ def write_comparison_outputs(ranked: pd.DataFrame, output_dir: Path, report_dir:
             "lw_scheme",
             "sw_scheme",
             "output_name",
-            "input_kind",
+            "variable",
             "validation_start",
             "validation_end",
             "n",
@@ -117,16 +118,16 @@ def write_comparison_outputs(ranked: pd.DataFrame, output_dir: Path, report_dir:
         if column in ranked.columns
     ]
     lines = [
-        "# WRF 参数化方案评分对比",
+        "# WRF parameterization scheme comparison",
         "",
-        "## 最佳方案",
+        "## Best scheme",
         "",
-        f"- 最佳方案：`{best.get('scheme_name', best.get('output_name'))}`",
-        f"- 综合评分：`{float(best['score']):.4f}`",
+        f"- Best scheme: `{best.get('scheme_name', best.get('output_name'))}`",
+        f"- Composite score: `{float(best['score']):.4f}`",
         "",
-        "排序规则：优先按综合评分降序；若接近或相同，再参考 RMSE、MAE、绝对 bias、Normalized cRMSE 较小和 PCC 较高。",
+        "Ranking rule: sort by composite score descending, then by lower RMSE, lower MAE, lower absolute bias, lower Normalized cRMSE, and higher PCC when ties are present.",
         "",
-        "## 方案排序",
+        "## Scheme ranking",
         "",
         frame_to_markdown_table(ranked[display_columns]),
     ]
@@ -136,10 +137,9 @@ def write_comparison_outputs(ranked: pd.DataFrame, output_dir: Path, report_dir:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Compare WRF scheme overall score tables and select the best scheme.")
-    parser.add_argument("--output-root", type=Path, default=Path("outputs"))
+    parser.add_argument("--output-root", type=Path, default=Path("outputs/runs/wrf_tmax_station_validation"))
     parser.add_argument("--schemes", default=None, help="Comma-separated output folder names to compare.")
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs/scheme-comparison/tables"))
-    parser.add_argument("--report-dir", type=Path, default=Path("reports/scheme-comparison"))
+    parser.add_argument("--output-dir", type=Path, default=None, help="Directory for comparison CSV and Markdown report.")
     return parser
 
 
@@ -148,7 +148,8 @@ def main() -> int:
     scheme_outputs = [item.strip() for item in args.schemes.split(",")] if args.schemes else None
     scores = collect_overall_scores(args.output_root, scheme_outputs)
     ranked = rank_schemes(scores)
-    csv_path, report_path = write_comparison_outputs(ranked, args.output_dir, args.report_dir)
+    output_dir = args.output_dir or args.output_root / "scheme-comparison"
+    csv_path, report_path = write_comparison_outputs(ranked, output_dir)
     best = ranked.iloc[0]
     print(f"best_scheme={best.get('scheme_name', best.get('output_name'))}")
     print(f"best_score={float(best['score']):.4f}")

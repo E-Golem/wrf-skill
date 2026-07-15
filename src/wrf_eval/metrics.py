@@ -4,7 +4,7 @@ import math
 
 import numpy as np
 
-DEFAULT_SCORE_METRICS = ["pcc", "rmse", "mae", "rsd"]
+DEFAULT_SCORE_METRICS = ["pcc", "bias", "mae", "rmse", "normalized_crmse", "rsd"]
 
 
 def _paired_arrays(observed, modeled) -> tuple[np.ndarray, np.ndarray]:

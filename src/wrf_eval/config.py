@@ -5,18 +5,17 @@ from pathlib import Path
 from typing import Any
 
 
+FIXED_SCORE_METRICS = ("pcc", "bias", "mae", "rmse", "normalized_crmse", "rsd")
+SUPPORTED_VARIABLES = ("T2", "Tmax", "RH")
+
+
 @dataclass(frozen=True)
 class WrfSection:
     input_root: Path
     schemes: str | list[Any] = "auto"
     scheme_name_pattern: str | None = None
-    input_kind: str = "hourly_t2"
-    variable: str = "T2"
-    file_patterns: tuple[str, ...] = ("T2_output*.nc", "T2_out*.nc")
+    file_patterns: tuple[str, ...] = ("wrfout_d0*",)
     coord_source: Path | None = None
-    rebuild_start: str | None = None
-    time_step_days: int = 1
-    drop_initial_frames: int = 0
 
 
 @dataclass(frozen=True)
@@ -27,32 +26,16 @@ class ObservedSection:
 
 
 @dataclass(frozen=True)
-class TimeSection:
-    time_offset_hours: int = 8
-    local_day_boundary_hour: int | None = 20
-    drop_incomplete_start_day: bool = True
-    drop_incomplete_end_day: bool = True
-
-
-@dataclass(frozen=True)
 class ValidationSection:
+    variable: str = "Tmax"
     start: str | None = "06-01"
     end: str | None = "10-01"
-    date_match: str = "exact"
-
-
-@dataclass(frozen=True)
-class MetricsSection:
-    selected: tuple[str, ...] = ("pcc", "bias", "mae", "rmse", "normalized_crmse", "rsd")
-    weights: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
 class OutputSection:
-    output_root: Path = Path("outputs/runs")
-    report_root: Path = Path("reports/runs")
+    root: Path = Path("outputs/runs")
     run_id: str | None = None
-    formats: tuple[str, ...] = ("csv", "markdown")
 
 
 @dataclass(frozen=True)
@@ -61,15 +44,17 @@ class ScoreToolConfig:
     project_name: str
     wrf: WrfSection
     observed: ObservedSection
-    time: TimeSection
     validation: ValidationSection
-    metrics: MetricsSection
     output: OutputSection
     continue_on_error: bool = False
 
     @property
     def run_id(self) -> str:
-        return self.output.run_id or self.project_name
+        return self.output.run_id or f"wrf_{self.validation.variable.lower()}_station_validation"
+
+    @property
+    def score_metrics(self) -> tuple[str, ...]:
+        return FIXED_SCORE_METRICS
 
 
 @dataclass(frozen=True)
@@ -80,7 +65,7 @@ class SchemeInput:
 
 
 def load_score_config(path: Path | str) -> ScoreToolConfig:
-    """Load and validate a WRF scoring YAML configuration file."""
+    """Load and validate a v1.1 WRF scoring YAML configuration file."""
     config_path = Path(path)
     data = _load_yaml_mapping(config_path)
     if not isinstance(data, dict):
@@ -89,61 +74,45 @@ def load_score_config(path: Path | str) -> ScoreToolConfig:
 
 
 def score_config_from_mapping(data: dict[str, Any]) -> ScoreToolConfig:
+    _reject_legacy_sections(data)
     version = int(data.get("version", 1))
     if version != 1:
-        raise ValueError(f"Unsupported config version: {version}")
+        raise ValueError(f"Unsupported config schema version: {version}")
 
     project = _mapping(data.get("project", {}), "project")
     wrf_data = _mapping(data.get("wrf", {}), "wrf")
     observed_data = _mapping(data.get("observed", {}), "observed")
-    time_data = _mapping(data.get("time", {}), "time")
     validation_data = _mapping(data.get("validation", {}), "validation")
-    metrics_data = _mapping(data.get("metrics", {}), "metrics")
     output_data = _mapping(data.get("output", {}), "output")
+    _reject_legacy_keys(wrf_data, {"input_kind", "variable", "temperature_stat", "rebuild_start", "time_step_days", "drop_initial_frames"}, "wrf")
+    _reject_legacy_keys(validation_data, {"date_match"}, "validation")
+    _reject_legacy_keys(output_data, {"output_root", "report_root"}, "output")
 
-    file_patterns = _file_patterns(wrf_data)
-    selected_metrics = _string_tuple(metrics_data.get("selected"), default=MetricsSection.selected)
+    variable = _normalize_variable(str(validation_data.get("variable", "Tmax")))
 
     return ScoreToolConfig(
         version=version,
-        project_name=str(project.get("name") or "wrf_score_run"),
+        project_name=str(project.get("name") or f"wrf_{variable.lower()}_station_validation"),
         wrf=WrfSection(
             input_root=Path(str(wrf_data.get("input_root", "data/wrfout"))),
             schemes=wrf_data.get("schemes", "auto"),
             scheme_name_pattern=_optional_str(wrf_data.get("scheme_name_pattern")),
-            input_kind=str(wrf_data.get("input_kind", "hourly_t2")),
-            variable=str(wrf_data.get("variable", "T2")),
-            file_patterns=file_patterns,
+            file_patterns=_file_patterns(wrf_data),
             coord_source=_optional_path(wrf_data.get("coord_source")),
-            rebuild_start=_optional_str(wrf_data.get("rebuild_start")),
-            time_step_days=int(wrf_data.get("time_step_days", 1)),
-            drop_initial_frames=int(wrf_data.get("drop_initial_frames", 0)),
         ),
         observed=ObservedSection(
             data_dir=Path(str(observed_data.get("data_dir", "data/observed"))),
             boundary=_optional_path(observed_data.get("boundary")),
             station_policy=str(observed_data.get("station_policy", "all_in_boundary")),
         ),
-        time=TimeSection(
-            time_offset_hours=int(time_data.get("time_offset_hours", 8)),
-            local_day_boundary_hour=_optional_int(time_data.get("local_day_boundary_hour", 20)),
-            drop_incomplete_start_day=bool(time_data.get("drop_incomplete_start_day", True)),
-            drop_incomplete_end_day=bool(time_data.get("drop_incomplete_end_day", True)),
-        ),
         validation=ValidationSection(
+            variable=variable,
             start=_optional_str(validation_data.get("start", "06-01")),
             end=_optional_str(validation_data.get("end", "10-01")),
-            date_match=str(validation_data.get("date_match", "exact")),
-        ),
-        metrics=MetricsSection(
-            selected=selected_metrics,
-            weights=_optional_weights(metrics_data.get("weights")),
         ),
         output=OutputSection(
-            output_root=Path(str(output_data.get("output_root", "outputs/runs"))),
-            report_root=Path(str(output_data.get("report_root", "reports/runs"))),
+            root=Path(str(output_data.get("root", "outputs/runs"))),
             run_id=_optional_str(output_data.get("run_id")),
-            formats=_string_tuple(output_data.get("formats"), default=OutputSection.formats),
         ),
         continue_on_error=bool(data.get("continue_on_error", False)),
     )
@@ -204,6 +173,27 @@ def _first_matching_pattern(path: Path, file_patterns: tuple[str, ...]) -> str |
         if any(path.glob(pattern)):
             return pattern
     return None
+
+
+def _normalize_variable(value: str) -> str:
+    key = value.strip().lower()
+    aliases = {"tmax": "Tmax", "t2": "T2", "rh": "RH", "rhu": "RH", "relative_humidity": "RH"}
+    if key not in aliases:
+        raise ValueError(f"Unsupported validation.variable: {value!r}. Expected one of: {', '.join(SUPPORTED_VARIABLES)}.")
+    return aliases[key]
+
+
+def _reject_legacy_sections(data: dict[str, Any]) -> None:
+    for key in ("time", "metrics"):
+        if key in data:
+            raise ValueError(f"v1.1 config no longer accepts top-level '{key}'. Time handling and metrics are fixed defaults.")
+
+
+def _reject_legacy_keys(section: dict[str, Any], keys: set[str], section_name: str) -> None:
+    found = sorted(keys.intersection(section))
+    if found:
+        joined = ", ".join(found)
+        raise ValueError(f"v1.1 config no longer accepts {section_name}.{joined}.")
 
 
 def _load_yaml_mapping(path: Path) -> dict[str, Any]:
@@ -350,17 +340,3 @@ def _optional_str(value: Any) -> str | None:
     if value is None or value == "":
         return None
     return str(value)
-
-
-def _optional_int(value: Any) -> int | None:
-    if value is None or value == "":
-        return None
-    return int(value)
-
-
-def _optional_weights(value: Any) -> dict[str, float] | None:
-    if value is None:
-        return None
-    if not isinstance(value, dict):
-        raise ValueError("metrics.weights must be a mapping.")
-    return {str(key): float(weight) for key, weight in value.items()}

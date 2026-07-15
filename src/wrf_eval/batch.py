@@ -21,7 +21,6 @@ class SchemeRunResult:
 class BatchRunResult:
     run_id: str
     output_root: Path
-    report_root: Path
     scheme_results: tuple[SchemeRunResult, ...]
     comparison_csv: Path | None
     comparison_report: Path | None
@@ -46,8 +45,7 @@ def run_batch_from_config_path(path: Path | str, progress_callback: ProgressCall
 def run_batch(config: ScoreToolConfig, progress_callback: ProgressCallback | None = None) -> BatchRunResult:
     """Run all configured schemes and generate a scheme comparison report."""
     schemes = discover_schemes(config)
-    run_output_root = config.output.output_root / config.run_id
-    run_report_root = config.output.report_root / config.run_id
+    run_output_root = config.output.root / config.run_id
     scheme_results: list[SchemeRunResult] = []
 
     _emit(progress_callback, f"[1/3] Discovered {len(schemes)} scheme(s) for run '{config.run_id}'.")
@@ -69,7 +67,8 @@ def run_batch(config: ScoreToolConfig, progress_callback: ProgressCallback | Non
             _emit(
                 progress_callback,
                 f"[2/3] ({index}/{len(schemes)}) Completed '{scheme.name}' in {elapsed:.1f}s; "
-                f"matched_rows={result.matched_rows}, score={result.overall_metrics.get('score'):.4f}.",
+                f"matched_rows={result.matched_rows}, excluded_days={result.excluded_day_count}, "
+                f"score={result.overall_metrics.get('score'):.4f}.",
             )
 
     successful_names = [item.scheme.name for item in scheme_results if item.result is not None]
@@ -81,7 +80,6 @@ def run_batch(config: ScoreToolConfig, progress_callback: ProgressCallback | Non
     comparison_csv, comparison_report = write_comparison_outputs(
         ranked,
         output_dir=run_output_root / "scheme-comparison",
-        report_dir=run_report_root / "scheme-comparison",
     )
     best = ranked.iloc[0]
     _emit(
@@ -92,7 +90,6 @@ def run_batch(config: ScoreToolConfig, progress_callback: ProgressCallback | Non
     return BatchRunResult(
         run_id=config.run_id,
         output_root=run_output_root,
-        report_root=run_report_root,
         scheme_results=tuple(scheme_results),
         comparison_csv=comparison_csv,
         comparison_report=comparison_report,
@@ -100,29 +97,18 @@ def run_batch(config: ScoreToolConfig, progress_callback: ProgressCallback | Non
 
 
 def processing_config_for_scheme(config: ScoreToolConfig, scheme: SchemeInput) -> ProcessingConfig:
-    """Build the existing single-scheme processing config for one discovered scheme."""
+    """Build the single-scheme processing config for one discovered scheme."""
     return ProcessingConfig(
         wrf_input=scheme.path,
         observed_dir=config.observed.data_dir,
         boundary=config.observed.boundary,
-        output_dir=config.output.output_root / config.run_id / scheme.name,
-        report_dir=config.output.report_root / config.run_id / scheme.name,
+        output_dir=config.output.root / config.run_id / scheme.name,
         scheme_name=scheme.name,
-        variable=config.wrf.variable,
-        input_kind=config.wrf.input_kind,
+        variable=config.validation.variable,
         file_pattern=scheme.file_pattern,
         coord_source=config.wrf.coord_source,
-        rebuild_start=config.wrf.rebuild_start,
-        time_step_days=config.wrf.time_step_days,
-        drop_initial_frames=config.wrf.drop_initial_frames,
-        time_offset_hours=config.time.time_offset_hours,
-        local_day_boundary_hour=config.time.local_day_boundary_hour,
-        drop_incomplete_start_day=config.time.drop_incomplete_start_day,
-        drop_incomplete_end_day=config.time.drop_incomplete_end_day,
         validation_start=config.validation.start,
         validation_end=config.validation.end,
-        score_metrics=list(config.metrics.selected),
-        date_match=config.validation.date_match,
     )
 
 

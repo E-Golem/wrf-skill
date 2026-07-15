@@ -3,11 +3,11 @@ from io import StringIO
 
 import pandas as pd
 
-from wrf_eval.observed import parse_china_daily_temperature_frame
+from wrf_eval.observed import parse_china_daily_humidity_frame, parse_china_daily_temperature_frame
 
 
 class ObservedTemperatureTests(unittest.TestCase):
-    def test_parse_daily_temperature_converts_coordinates_and_tmax_units(self):
+    def test_parse_daily_temperature_converts_coordinates_and_temperature_units(self):
         raw = StringIO(
             "\n".join(
                 [
@@ -21,12 +21,33 @@ class ObservedTemperatureTests(unittest.TestCase):
 
         parsed = parse_china_daily_temperature_frame(frame)
 
-        self.assertEqual(list(parsed["station_id"]), ["50136", "57494"])
+        self.assertEqual(list(parsed["station_id"]), ["50136", "50136", "57494"])
         self.assertAlmostEqual(parsed.loc[0, "lat"], 52 + 58 / 60)
         self.assertAlmostEqual(parsed.loc[0, "lon"], 122 + 31 / 60)
         self.assertEqual(parsed.loc[0, "date"].isoformat(), "2010-05-01")
+        self.assertAlmostEqual(parsed.loc[0, "tmean_obs_c"], 6.8)
         self.assertAlmostEqual(parsed.loc[0, "tmax_obs_c"], 19.2)
-        self.assertAlmostEqual(parsed.loc[1, "tmax_obs_c"], 30.1)
+        self.assertTrue(pd.isna(parsed.loc[1, "tmax_obs_c"]))
+
+    def test_parse_daily_humidity_converts_coordinates_and_mean_relative_humidity(self):
+        raw = StringIO(
+            "\n".join(
+                [
+                    "50136 5258 12231 4330 2020 6 1 78 35 0 0",
+                    "57494 3016 11403 230 2020 6 1 32766 20 0 0",
+                    "57494 3016 11403 230 2020 6 2 81 18 0 0",
+                ]
+            )
+        )
+        frame = pd.read_csv(raw, sep=r"\s+", header=None, engine="python")
+
+        parsed = parse_china_daily_humidity_frame(frame)
+
+        self.assertEqual(list(parsed["station_id"]), ["50136", "57494"])
+        self.assertAlmostEqual(parsed.loc[0, "lat"], 52 + 58 / 60)
+        self.assertEqual(parsed.loc[0, "date"].isoformat(), "2020-06-01")
+        self.assertAlmostEqual(parsed.loc[0, "rh_mean_obs_pct"], 78.0)
+        self.assertAlmostEqual(parsed.loc[1, "rh_mean_obs_pct"], 81.0)
 
 
 if __name__ == "__main__":
